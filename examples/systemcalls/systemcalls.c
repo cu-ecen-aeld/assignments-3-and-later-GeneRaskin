@@ -11,13 +11,12 @@ bool do_system(const char *cmd)
 {
 
 /*
- * TODO  add your code here
  *  Call the system() function with the command set in the cmd
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
-
-    return true;
+    int res = system(cmd);
+    return (res == -1) ? false : true;
 }
 
 /**
@@ -39,18 +38,22 @@ bool do_exec(int count, ...)
     va_list args;
     va_start(args, count);
     char * command[count+1];
-    int i;
+    int i, status;
     for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
+
+    va_end(args);
+
+    int pipefd[2]; // pipe to communicate execv failure in child
+    if (pipe(pipefd) == -1) {
+      perror("pipe failed");
+      return false;
+    }
 
 /*
- * TODO:
  *   Execute a system command by calling fork, execv(),
  *   and wait instead of system (see LSP page 161).
  *   Use the command[0] as the full path to the command to execute
@@ -59,9 +62,49 @@ bool do_exec(int count, ...)
  *
 */
 
-    va_end(args);
+    pid_t pid = fork();
+    if (pid == 0) {
+    	close(pipefd[0]); // close read end of the pipe
+        if (execv(command[0], command) == -1) {
+        	int err = errno;
+            write(pipefd[1], &err, sizeof(err)); // send errno to the parent
+            close(pipefd[1]);
+	    	perror("execv failed");
+	    	_exit(EXIT_FAILURE);
+        }
+    } else if (pid == -1) {
+		perror("fork failed");
+        close(pipefd[0]);
+        close(pipefd[1]);
+    	return false;
+    }
 
-    return true;
+	close(pipefd[1]); // close write end of the pipe
+
+    if (wait(&status) == -1) {
+		perror("wait failed");
+    	return false;
+    }
+
+	int child_errno = 0;
+	ssize_t bytes_read = read(pipefd[0], &child_errno, sizeof(child_errno));
+	close(pipefd[0]); // close read end of the pipe
+
+	if (bytes_read > 0) {
+		//child execv failed
+		fprintf(stderr, "Child execv failed with error: %s\n", strerror(child_errno));
+		return false;
+	}
+
+    if (WIFEXITED(status)) {
+		int exit_status = WEXITSTATUS(status);
+		if (exit_status == 0)
+    		return true;
+		fprintf(stderr, "Command exited with status %d\n", exit_status);
+    }
+
+    fprintf(stderr, "Command terminated abnormally\n");
+    return false;
 }
 
 /**
@@ -74,26 +117,85 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     va_list args;
     va_start(args, count);
     char * command[count+1];
-    int i;
+    int i, status;
     for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
 
+    va_end(args);
 
+    int pipefd[2]; // pipe to communicate execv/dup2 failure in child
+    if (pipe(pipefd) == -1) {
+    	perror("pipe failed");
+        return false;
+    }
 /*
- * TODO
  *   Call execv, but first using https://stackoverflow.com/a/13784315/1446624 as a refernce,
  *   redirect standard out to a file specified by outputfile.
  *   The rest of the behaviour is same as do_exec()
  *
 */
+    int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
+    if (fd == -1) {
+    	PERROR_ARGS("Failed to open the outputfile %s", outputfile);
+		return false;
+    }
 
-    va_end(args);
+    pid_t pid = fork();
 
-    return true;
+    if (pid == -1) {
+		close(fd);
+        close(pipefd[0]);
+        close(pipefd[1]);
+    	perror("fork failed");
+		return false;
+    } else if (pid == 0) {
+    	close(pipefd[0]); // close read end of the pipe
+    	if (dup2(fd, STDOUT_FILENO) == -1) {
+	    	perror("dup2 failed");
+	    	close(fd);
+            int err = errno;
+            write(pipefd[1], &err, sizeof(err));
+            close(pipefd[1]); // close write end of the pipe
+	    	_exit(EXIT_FAILURE);
+		}
+		close(fd);
+		if (execv(command[0], command) == -1) {
+	    	perror("execv failed");
+            int err = errno;
+            write(pipefd[1], &err, sizeof(err));
+            close(pipefd[1]); // close write end of the pipe
+    	    _exit(EXIT_FAILURE);	    
+		}
+    }
+
+    close(fd);
+    close(pipefd[1]); // close write end of the pipe
+
+    if (wait(&status) == -1) {
+    	perror("wait failed");
+		return false;
+    }
+
+    int child_errno = 0;
+    ssize_t bytes_read = read(pipefd[0], &child_errno, sizeof(child_errno));
+    if (bytes_read > 0) {
+    	// child dup2 or execv failed
+        fprintf(stderr, "Child execv or dup2 failed with error: %s\n", strerror(child_errno));
+        return false;
+    }
+
+    if (WIFEXITED(status)) {
+    	int exit_status = WEXITSTATUS(status);
+		if (exit_status == 0) {
+	    	return true;
+		}
+		fprintf(stderr, "Command exited with status %d\n", exit_status);
+		return false;
+    }
+
+    fprintf(stderr, "Command terminated abnormally\n");
+    return false;
 }
