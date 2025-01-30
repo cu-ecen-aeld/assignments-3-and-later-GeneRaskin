@@ -55,17 +55,19 @@ fi
 
 for i in $( seq 1 $NUMFILES)
 do
-	./etc/finder-app/writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
+	/etc/finder-app/writer "$WRITEDIR/${username}$i.txt" "$WRITESTR"
 done
 
-OUTPUTSTRING=$(./etc/finder-app/finder.sh "/tmp/assignment4-result.txt" "$WRITESTR")
+OUTPUTSTRING=$(/etc/finder-app/finder.sh "$WRITEDIR" "$WRITESTR" 2>&1)
 
 set +e
-echo ${OUTPUTSTRING} | grep "${MATCHSTR}"
-if [ $? -eq 0 ]; then
-	echo "success"
-	exit 0
-else
-	echo "failed: expected  ${MATCHSTR} in ${OUTPUTSTRING} but instead found"
-	exit 1
-fi
+{
+  echo ${OUTPUTSTRING} | grep "${MATCHSTR}"
+  if [ $? -eq 0 ]; then
+	  echo "success"
+	  exit 0
+  else
+	  echo "failed: expected  ${MATCHSTR} in ${OUTPUTSTRING} but instead found"
+	  exit 1
+  fi
+} > /tmp/assignment4-result.txt 2>&1
